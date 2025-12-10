@@ -29,7 +29,7 @@ func NewClient(address, username, password string, timeout time.Duration) (*Clie
 
 	baseURL := fmt.Sprintf("http://%s", address)
 
-	return &Client{
+	client := &Client{
 		baseURL: baseURL,
 		httpClient: &http.Client{
 			Timeout: timeout,
@@ -37,7 +37,50 @@ func NewClient(address, username, password string, timeout time.Duration) (*Clie
 		},
 		username: username,
 		password: password,
-	}, nil
+	}
+
+	// Initialize session by fetching the main page to get CSRF token
+	if err := client.initSession(); err != nil {
+		return nil, fmt.Errorf("failed to initialize session: %w", err)
+	}
+
+	return client, nil
+}
+
+// initSession initializes the session by fetching a page to get CSRF token
+func (c *Client) initSession() error {
+	ctx, cancel := context.WithTimeout(context.Background(), c.httpClient.Timeout)
+	defer cancel()
+
+	// GET the phyRates page to get CSRF token cookie
+	url := fmt.Sprintf("%s/phyRates.html", c.baseURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create init request: %w", err)
+	}
+
+	req.SetBasicAuth(c.username, c.password)
+
+	fmt.Printf("[DEBUG] Initializing session with GET %s\n", url)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to initialize session: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("session init failed with status %d", resp.StatusCode)
+	}
+
+	// Check if we got a CSRF token cookie
+	cookies := c.httpClient.Jar.Cookies(req.URL)
+	fmt.Printf("[DEBUG] Got %d cookies after init\n", len(cookies))
+	for _, cookie := range cookies {
+		fmt.Printf("[DEBUG] Cookie: %s=%s\n", cookie.Name, cookie.Value)
+	}
+
+	return nil
 }
 
 // apiResponse represents the JSON response structure from the device
@@ -144,18 +187,25 @@ func (c *Client) doRequest(ctx context.Context, endpoint string, payload interfa
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
+	// Debug logging
+	fmt.Printf("[DEBUG] Request to %s: %s\n", url, string(reqBody))
+
 	// Create request
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Set headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
+	// Set headers - device expects form-encoded, not JSON
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "text/html, */*")
+
+	// Debug: Log headers
+	fmt.Printf("[DEBUG] Content-Type: %s\n", req.Header.Get("Content-Type"))
 
 	// Set basic auth
 	req.SetBasicAuth(c.username, c.password)
+	fmt.Printf("[DEBUG] Using Basic Auth with username: %s\n", c.username)
 
 	// Extract CSRF token from cookies if present
 	for _, cookie := range c.httpClient.Jar.Cookies(req.URL) {
@@ -180,16 +230,29 @@ func (c *Client) doRequest(ctx context.Context, endpoint string, payload interfa
 
 	// Check status code
 	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("[DEBUG] Error response: status=%d, body=%s\n", resp.StatusCode, string(body))
 		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
 	}
+
+	// Debug logging
+	fmt.Printf("[DEBUG] Response (first 200 chars): %s\n", string(body[:min(200, len(body))]))
 
 	return body, nil
 }
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // GetLocalInfo retrieves local device information (endpoint 0x15)
 func (c *Client) GetLocalInfo(ctx context.Context) (*LocalInfo, error) {
-	// The endpoint expects an empty data array
-	payload := apiRequest{Data: []interface{}{}}
+	// The endpoint expects {"data":[]} format
+	payload := map[string]interface{}{
+		"data": []interface{}{},
+	}
 
 	body, err := c.doRequestWithRetry(ctx, "/ms/0/0x15", payload)
 	if err != nil {
@@ -202,10 +265,21 @@ func (c *Client) GetLocalInfo(ctx context.Context) (*LocalInfo, error) {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	// Parse data array
-	var data []int
-	if err := json.Unmarshal(apiResp.Data, &data); err != nil {
+	// Parse data array - device returns hex strings like "0x00000001"
+	var dataStrings []string
+	if err := json.Unmarshal(apiResp.Data, &dataStrings); err != nil {
 		return nil, fmt.Errorf("failed to parse data array: %w", err)
+	}
+
+	// Convert hex strings to integers
+	data := make([]int, len(dataStrings))
+	for i, str := range dataStrings {
+		var val int64
+		_, err := fmt.Sscanf(str, "0x%x", &val)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse hex value %s: %w", str, err)
+		}
+		data[i] = int(val)
 	}
 
 	// Validate data length (should have at least 13 elements based on JavaScript)
@@ -230,8 +304,10 @@ func (c *Client) GetLocalInfo(ctx context.Context) (*LocalInfo, error) {
 
 // GetNetworkNodeInfo retrieves information about a specific network node (endpoint 0x16)
 func (c *Client) GetNetworkNodeInfo(ctx context.Context, nodeID int) (*NetworkNodeInfo, error) {
-	// The endpoint expects the node ID as data parameter
-	payload := apiRequest{Data: nodeID}
+	// The endpoint expects the node ID as data array: {"data":[nodeID]}
+	payload := map[string]interface{}{
+		"data": []interface{}{nodeID},
+	}
 
 	body, err := c.doRequestWithRetry(ctx, "/ms/0/0x16", payload)
 	if err != nil {
@@ -244,10 +320,21 @@ func (c *Client) GetNetworkNodeInfo(ctx context.Context, nodeID int) (*NetworkNo
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	// Parse data array
-	var data []int
-	if err := json.Unmarshal(apiResp.Data, &data); err != nil {
+	// Parse data array - device returns hex strings
+	var dataStrings []string
+	if err := json.Unmarshal(apiResp.Data, &dataStrings); err != nil {
 		return nil, fmt.Errorf("failed to parse data array: %w", err)
+	}
+
+	// Convert hex strings to integers
+	data := make([]int, len(dataStrings))
+	for i, str := range dataStrings {
+		var val int64
+		_, err := fmt.Sscanf(str, "0x%x", &val)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse hex value %s: %w", str, err)
+		}
+		data[i] = int(val)
 	}
 
 	// Validate data length (should have at least 5 elements based on JavaScript usage)
@@ -267,19 +354,9 @@ func (c *Client) GetNetworkNodeInfo(ctx context.Context, nodeID int) (*NetworkNo
 
 // GetFMRInfo retrieves Frame Management Request information (endpoint 0x1D)
 func (c *Client) GetFMRInfo(ctx context.Context, nodeMask, version int) (*FMRInfo, error) {
-	// The endpoint expects node mask as 'data' and version as 'data2'
-	// Since we're sending JSON, we need to structure this appropriately
-	// Based on the HTML, it seems to use form data with multiple data fields
-
-	// Create a custom payload structure
-	type fmrRequest struct {
-		Data  int `json:"data"`
-		Data2 int `json:"data2"`
-	}
-
-	payload := fmrRequest{
-		Data:  nodeMask,
-		Data2: version,
+	// The endpoint expects both values in data array: {"data":[nodeMask, version]}
+	payload := map[string]interface{}{
+		"data": []interface{}{nodeMask, version},
 	}
 
 	body, err := c.doRequestWithRetry(ctx, "/ms/0/0x1D", payload)
@@ -293,19 +370,21 @@ func (c *Client) GetFMRInfo(ctx context.Context, nodeMask, version int) (*FMRInf
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	// Parse data array as uint32 values
-	var data []uint32
-	if err := json.Unmarshal(apiResp.Data, &data); err != nil {
-		// Try parsing as []int and convert
-		var intData []int
-		if err2 := json.Unmarshal(apiResp.Data, &intData); err2 != nil {
-			return nil, fmt.Errorf("failed to parse data array: %w (also tried int: %w)", err, err2)
+	// Parse data array - device returns hex strings
+	var dataStrings []string
+	if err := json.Unmarshal(apiResp.Data, &dataStrings); err != nil {
+		return nil, fmt.Errorf("failed to parse data array: %w", err)
+	}
+
+	// Convert hex strings to uint32
+	data := make([]uint32, len(dataStrings))
+	for i, str := range dataStrings {
+		var val uint64
+		_, err := fmt.Sscanf(str, "0x%x", &val)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse hex value %s: %w", str, err)
 		}
-		// Convert int to uint32
-		data = make([]uint32, len(intData))
-		for i, v := range intData {
-			data[i] = uint32(v)
-		}
+		data[i] = uint32(val)
 	}
 
 	fmrInfo := &FMRInfo{

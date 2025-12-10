@@ -50,15 +50,32 @@ func NewMultiDeviceRegistry(cfg *config.Config) (*MultiDeviceRegistry, error) {
 	return registry, nil
 }
 
-// Register registers all device collectors with the Prometheus registry
+// Describe implements prometheus.Collector interface
+// This allows MultiDeviceRegistry itself to be registered as a single collector
+func (r *MultiDeviceRegistry) Describe(ch chan<- *prometheus.Desc) {
+	// Delegate to all sub-collectors
+	for _, collector := range r.collectors {
+		collector.Describe(ch)
+	}
+}
+
+// Collect implements prometheus.Collector interface
+// This collects metrics from all devices
+func (r *MultiDeviceRegistry) Collect(ch chan<- prometheus.Metric) {
+	// Delegate to all sub-collectors
+	for _, collector := range r.collectors {
+		collector.Collect(ch)
+	}
+}
+
+// Register registers the multi-device collector with the Prometheus registry
 func (r *MultiDeviceRegistry) Register(registry *prometheus.Registry) error {
-	for i, collector := range r.collectors {
-		if err := registry.Register(collector); err != nil {
-			return fmt.Errorf("failed to register collector %d: %w", i, err)
-		}
+	// Register the multi-device collector itself (not individual collectors)
+	if err := registry.Register(r); err != nil {
+		return fmt.Errorf("failed to register multi-device collector: %w", err)
 	}
 
-	log.Printf("Successfully registered %d device collector(s)", len(r.collectors))
+	log.Printf("Successfully registered multi-device collector with %d device(s)", len(r.collectors))
 	return nil
 }
 
