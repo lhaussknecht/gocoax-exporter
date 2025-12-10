@@ -72,6 +72,68 @@ type FMRInfo struct {
 	Data []uint32
 }
 
+// retryableError checks if an error is retryable
+func retryableError(err error) bool {
+	// Network errors, timeouts, and 5xx status codes are retryable
+	if err == nil {
+		return false
+	}
+	// Check for common transient errors
+	errStr := err.Error()
+	return contains(errStr, "connection refused") ||
+		contains(errStr, "connection reset") ||
+		contains(errStr, "timeout") ||
+		contains(errStr, "temporary failure")
+}
+
+// contains checks if a string contains a substring (case-insensitive)
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) &&
+		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
+		 findSubstr(s, substr)))
+}
+
+func findSubstr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// doRequestWithRetry performs an HTTP POST request with retry logic
+func (c *Client) doRequestWithRetry(ctx context.Context, endpoint string, payload interface{}) ([]byte, error) {
+	const maxRetries = 3
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: 100ms, 200ms, 400ms
+			backoff := time.Duration(100*(1<<uint(attempt-1))) * time.Millisecond
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+
+		body, err := c.doRequest(ctx, endpoint, payload)
+		if err == nil {
+			return body, nil
+		}
+
+		lastErr = err
+
+		// Don't retry if error is not retryable
+		if !retryableError(err) {
+			break
+		}
+	}
+
+	return nil, fmt.Errorf("request failed after %d attempts: %w", maxRetries, lastErr)
+}
+
 // doRequest performs an HTTP POST request to the device API
 func (c *Client) doRequest(ctx context.Context, endpoint string, payload interface{}) ([]byte, error) {
 	url := fmt.Sprintf("%s%s", c.baseURL, endpoint)
@@ -129,7 +191,7 @@ func (c *Client) GetLocalInfo(ctx context.Context) (*LocalInfo, error) {
 	// The endpoint expects an empty data array
 	payload := apiRequest{Data: []interface{}{}}
 
-	body, err := c.doRequest(ctx, "/ms/0/0x15", payload)
+	body, err := c.doRequestWithRetry(ctx, "/ms/0/0x15", payload)
 	if err != nil {
 		return nil, fmt.Errorf("GetLocalInfo request failed: %w", err)
 	}
@@ -171,7 +233,7 @@ func (c *Client) GetNetworkNodeInfo(ctx context.Context, nodeID int) (*NetworkNo
 	// The endpoint expects the node ID as data parameter
 	payload := apiRequest{Data: nodeID}
 
-	body, err := c.doRequest(ctx, "/ms/0/0x16", payload)
+	body, err := c.doRequestWithRetry(ctx, "/ms/0/0x16", payload)
 	if err != nil {
 		return nil, fmt.Errorf("GetNetworkNodeInfo request failed: %w", err)
 	}
@@ -220,7 +282,7 @@ func (c *Client) GetFMRInfo(ctx context.Context, nodeMask, version int) (*FMRInf
 		Data2: version,
 	}
 
-	body, err := c.doRequest(ctx, "/ms/0/0x1D", payload)
+	body, err := c.doRequestWithRetry(ctx, "/ms/0/0x1D", payload)
 	if err != nil {
 		return nil, fmt.Errorf("GetFMRInfo request failed: %w", err)
 	}
