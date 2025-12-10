@@ -1,0 +1,30 @@
+# Example configuration for goCoax Prometheus Exporter
+
+# Address and port to listen on for Prometheus metrics
+listen_address: ":9090"
+
+# Timeout for scraping device metrics (in seconds)
+scrape_timeout: 10
+
+# List of goCoax devices to monitor
+devices:
+  # First device
+  - name: "bridge-50"
+    address: "192.168.98.50:80"
+    username: "admin"
+    password: "your-password-here"
+
+  # Second device
+  - name: "bridge-53"
+    address: "192.168.98.53:80"
+    username: "admin"
+    password: "your-password-here"
+
+# Environment variable overrides:
+# GOCOAX_LISTEN_ADDRESS - Override listen address
+# GOCOAX_SCRAPE_TIMEOUT - Override scrape timeout
+# GOCOAX_DEVICE_0_NAME - Override first device name
+# GOCOAX_DEVICE_0_ADDRESS - Override first device address
+# GOCOAX_DEVICE_0_USERNAME - Override first device username
+# GOCOAX_DEVICE_0_PASSWORD - Override first device password
+# (Similar pattern for DEVICE_1_, DEVICE_2_, etc.)
