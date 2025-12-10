@@ -1,0 +1,35 @@
+# Example Prometheus configuration for goCoax exporter
+
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+
+scrape_configs:
+  # goCoax exporter
+  - job_name: 'gocoax'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          environment: 'production'
+          location: 'home'
+
+    # Optional: Relabeling rules
+    # metric_relabel_configs:
+    #   - source_labels: [device]
+    #     target_label: instance
+
+  # If running in Docker Compose
+  # - job_name: 'gocoax-docker'
+  #   static_configs:
+  #     - targets: ['gocoax-exporter:9090']
+
+# Optional: Alerting rules
+# rule_files:
+#   - 'gocoax_alerts.yml'
+
+# Optional: Alertmanager configuration
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['localhost:9093']
