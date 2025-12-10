@@ -1,0 +1,60 @@
+html, ul, li, dl, dt, dd, select, textarea, body, div, p, td, input {
+    font-size: 12px; font-family: Tahoma, Helvetica, Arial;
+}
+body {
+    margin: 1px 0px auto; background-color: #FFF;
+}
+html,body{height:100%}
+
+#container {padding:0px 0px;margin:2% auto;width:1220px; height:100%;}
+
+#leftNav, #midMain, #rightHelp, #footer {
+    float:left; border-color: #ACD5DD; border-style:solid; border-width:0px; border:#DDDDDD 1px solid;
+}
+
+#leftNav {width:200px; height:80%; background-color: #DDDDDD;}
+#leftNav ul {margin: 0;padding: 0;list-style-type: none;}
+#leftNav li { margin: 0px; font-size:20px;}
+#leftNav ul ul li { margin: 0; font-size:12px; }
+#leftNav ul ul li a:link {color: #000; background-color: #99BBFF; text-decoration: underline; display: block; padding: 5px 5px 5px 30px;}
+#leftNav ul ul li a:visited {color: #000; background-color: #99BBFF; text-decoration:underline; display: block; padding: 5px 5px 5px 30px;}
+#leftNav ul ul li a:hover,active {color: #000; background-color: #5599FF; text-decoration:underline; display: block; padding: 5px 5px 5px 30px;}
+
+#midMain {width:820px; height:80%; overflow:auto;}
+#pageTitle {margin:10px 1px 1px 1px;}
+#pageTitle .topTitle {font-size:30px; font-weight:bold;}
+#pageContent {margin:0px 1px 1px 1px;}
+
+#rightHelp {width:180px; height:80%; overflow:auto; background-color: #DDDDDD;}
+#logoPic {width:120%; height:120%;}
+#helpInfo {margin:10px 0;}
+
+#footer {width:1214px; height:5%;}
+
+#box_header {
+    border: #008080 1px solid; background-color: #dfdfdf; width:100%;
+}
+#box_header .topheader {
+    margin: 0px -10px 5px; padding: 5px 5px 5px 10px; font-weight: bold; font-size: 12px; text-transform: uppercase; color: #000; letter-spacing: 1px; background-color: #99BBFF;
+}
+#box_header .content {
+    padding: 10px; font-size: 12px; line-height: 16px;
+}
+#body_header {
+    border: #008080 1px solid; background-color: #fff; margin: 5px 0px 0px; width: 100%;
+}
+#body_header .topheader{
+    margin: 0px -10px 5px; padding: 5px 5px 5px 10px; font-weight: bold; font-size: 12px; text-transform: uppercase; color: #f1f1f1; letter-spacing: 1px; background-color: #99BBFF}
+#body_header .content {
+    padding: 10px;
+}
+
+.formarea td {
+    padding-right: 0px! important; padding-left: 0px! important; padding-bottom: 2px! important; padding-top: 2px! important; vertical-align: middle;
+}
+.formarea .form_label {
+    padding-right: 10px! important; font-weight: bold; width: 170px; text-align: right;
+}
+
+.clear {clear:both;}
+.redLabel {color: #F00}

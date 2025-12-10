@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"><head>
+<meta http-equiv="content-type" content="text/html; charset=windows-1252">
+<title>PHY Rates</title>
+<link rel="stylesheet" href="PHY%20Rates-Dateien/style.css" type="text/css">
+<script language="javascript" src="PHY%20Rates-Dateien/main.js"></script>
+<script language="JavaScript">
+
+var myNodeID = 0;
+var numNode = 0;
+var MAX_NUM_NODES = 16;
+
+var phy_rates = [];
+var rateNper = [];
+var rateVlper = [];
+var rateGcd = [];
+var nodeId = new Array(MAX_NUM_NODES);
+var nodeBitMask = 0;
+var ncMocaVer = 0x20;
+var LocalInfo = [];
+
+var currNodeMask;
+var fmrInfo = [];
+var netInfo = new Array(MAX_NUM_NODES);
+
+var myNodeVersion = 0;
+var progresCnt = 1;
+
+var LDPC_LEN_100MHZ = 3900;
+var LDPC_LEN_50MHZ = 1200;
+var FFT_LEN_100MHZ = 512;
+var FFT_LEN_50MHZ = 256;
+
+function init_proc()
+{
+  for(id = 0; id < MAX_NUM_NODES; id++)
+  {
+    phy_rates[id] = new Array(MAX_NUM_NODES);
+    rateNper[id] = new Array(MAX_NUM_NODES);
+    rateVlper[id] = new Array(MAX_NUM_NODES);
+  }
+}
+
+function refreshPage()
+{
+
+  numNode = 0;
+
+  /* First parse the information, and calculate the rates */
+  for(id = 0; id < MAX_NUM_NODES; id++)
+  {
+    if(!(nodeBitMask & (1 << id)))
+      continue;
+
+    /* Let's show the node id here.*/
+    nodeId[numNode] = id;
+
+    entryNodePayloadVer = 0x10; /* Get the MocaVer of the node */
+
+    /* Get each NODE's MoCA version */
+    var mocaNodeVer = netInfo[nodeId[numNode]][4] & 0xFF;
+
+    /*
+    entry node's FMR payload version will be min of
+    entry node's moca version and NC node's moca version.
+    */
+
+    entryNodePayloadVer = Math.min(mocaNodeVer, ncMocaVer);
+
+    readIndx = 10; /* in FMR payload */
+    allignmentFlag = true;
+
+    rateGcd[numNode] = 0;
+
+    console.log("id = " + id + " mocaNodeVer = " + mocaNodeVer + " ncMocaVer = " + ncMocaVer + " entryNodePayloadVer = " + entryNodePayloadVer);
+
+    /* console.log(ver); */
+    for(jd = 0; jd < MAX_NUM_NODES; jd++)
+    {
+
+      // Determine frame ver here
+      // Min (fmrPayloadVer, jd's mocaNodeVer)
+      if ((nodeBitMask & (1 << jd)))
+      {
+        /*
+        if NC node's moca version is less than MOCA 2.x then FMR payload
+        version will be min of entry node's PAYLOAD version and corresponding
+        node's moca version.
+        If not then FMR payload version will be entry NODE's moca version.
+        */
+        if (ncMocaVer < 0x20)
+        {
+          fmrPayloadVer = Math.min(entryNodePayloadVer, (netInfo[jd][4] & 0xFF));
+        }
+        else
+        {
+          fmrPayloadVer = mocaNodeVer;
+        }
+
+        console.log("jd = " + jd + " Jd's mocaNodeVer = " + (netInfo[jd][4] & 0xFF) + " fmrPayloadVer = " + fmrPayloadVer + " ");
+      }
+      else
+      {
+        // If node is not present then skip data in the frm payload
+        // based on entry node's version
+        // 6-bytes for 2.x 16-bits for 1.x
+        fmrPayloadVer = mocaNodeVer;
+
+        if (fmrPayloadVer >= 0x20)
+        {
+          if (allignmentFlag)
+            readIndx++;
+          else
+            readIndx+=2;
+        }
+        else
+        {
+          if (allignmentFlag)
+            ;
+          else
+            readIndx++;
+        }
+
+        allignmentFlag = !allignmentFlag;
+
+        continue;
+      }
+
+      if ((fmrPayloadVer == 0x20) || (fmrPayloadVer == 0x25))
+      {
+        /**
+        Parse FMR response from device into individual fields based on MoCA 2.0 SPEC
+        **/
+        if (allignmentFlag)
+        {
+          gapNper     =   ((fmrInfo[id][readIndx] >> 24) & 0xff);
+          gapVLper    =   ((fmrInfo[id][readIndx] >> 16) & 0xff);
+          ofdmbNper   =    (fmrInfo[id][readIndx] & 0xffff);
+          ofdmbVLper  =   ((fmrInfo[id][readIndx+1] >> 16) & 0xffff);
+          readIndx++;
+        }
+        else
+        {
+          gapNper     =   ((fmrInfo[id][readIndx] >> 8) & 0xff);
+          gapVLper    =   ((fmrInfo[id][readIndx] >> 0) & 0xff);
+          ofdmbNper   =   ((fmrInfo[id][readIndx+1] >> 16) & 0xffff);
+          ofdmbVLper  =   ((fmrInfo[id][readIndx+1] >> 0) & 0xffff);
+          readIndx+=2;
+        }
+      }
+      else
+      {
+
+        /**
+          Parse FMR response from device into individual fields based on MoCA 1.x SPEC
+        **/
+
+        gapVLper = 0;
+        ofdmbVLper = 0;
+
+        tempVar = (fmrInfo[id][readIndx]);
+        tempGapVlper = 0;
+        ofdmbVLper   = 0;
+
+        if (allignmentFlag)
+        {
+          gapNper     =   ((fmrInfo[id][readIndx] & 0xf8000000) >> 27);
+          ofdmbNper   =   ((fmrInfo[id][readIndx] & 0x07ff0000) >> 16);
+
+          tempGapVlper = (fmrInfo[id][readIndx] & 0xf8000000);
+          ofdmbVLper   = (fmrInfo[id][readIndx] & 0x07ff0000);
+
+        }
+        else
+        {
+          gapNper     =   ((fmrInfo[id][readIndx] & 0x0000f800) >> 11);
+          ofdmbNper   =    (fmrInfo[id][readIndx] & 0x000007ff);
+
+          tempGapVlper = (fmrInfo[id][readIndx] & 0x0000f800);
+          ofdmbVLper   = (fmrInfo[id][readIndx] & 0x000007ff);
+
+          readIndx++;
+        }
+
+      }
+
+      allignmentFlag = !allignmentFlag;
+
+      /**
+      Expression to calculate PHY rate using FMR
+
+      For MoCA 1.1,
+      PHY rate = (192/208)*bits per symbol *50/(256+(CP*2+10)) = 1200*bits per symbol/((256+(CP*2+10))*26)
+
+      For MoCA 2.0,
+      PHY rate = (3900/4600)*bits per symbol *100/ (512+(CP+10)*2) = 3900*bits per symbol/((512+(CP+10)*2)*46)
+
+      LDPC_LEN_100MHZ  -->  3900;
+      LDPC_LEN_50MHZ   -->  3900;
+
+      FFT_LEN_100MHZ   -->  512;
+      FFT_LEN_50MHZ    -->  256;
+
+      CP --> data from FMR response
+
+      NOTE: MOCA 2.5 Nodes will report either NPER or VLPER at any time based on boot config value txpriorityper (use clnkcfg to config this value)
+
+      txpriorityper = 0   --> to report NPER
+      txpriorityper = 15  --> (0xf) to report VLPER
+
+      **/
+
+      /* Now do the calculations */
+      if (gapVLper == 0)
+      {
+        rateVlper[numNode][jd] = 0;
+      }
+      else
+      {
+        rateVlper[numNode][jd] = Math.floor((LDPC_LEN_100MHZ * ofdmbVLper) / ((FFT_LEN_100MHZ + ((gapVLper + 10) * 2)) * 46));
+      }
+
+      if (gapNper == 0)
+      {
+        rateNper[numNode][jd] = 0;
+      }
+      else if ((gapVLper == 0) && (fmrPayloadVer == 0x20))
+      {
+        rateNper[numNode][jd] = Math.floor((LDPC_LEN_50MHZ * ofdmbNper) / ((FFT_LEN_50MHZ + (gapNper * 2 + 10)) * 26));
+      }
+      else
+      {
+        rateNper[numNode][jd] = Math.floor((LDPC_LEN_100MHZ * (ofdmbNper)) / ((FFT_LEN_100MHZ + ((gapNper + 10) * 2)) * 46));
+      }
+
+      /* GCD for 1.x nodes - Calculate 50 MHz GCD*/
+      if ((id == jd) && ((mocaNodeVer & 0xf0) == 0x10))
+      {
+        gapGcd = gapNper;
+        ofdmbGcd = ofdmbNper;
+        rateGcd[numNode] = Math.floor((LDPC_LEN_50MHZ * ofdmbGcd) / ((FFT_LEN_50MHZ + (gapGcd * 2 + 10)) * 26));
+      }
+      else if ((id == jd) && ((mocaNodeVer & 0xf0) == 0x20))
+      {
+        /* GCD for 2.x nodes - Calculate 100MHz GCD */
+        gapGcd = gapNper;
+        ofdmbGcd = ofdmbNper;
+        rateGcd[numNode] = Math.floor((LDPC_LEN_100MHZ * ofdmbGcd) / ((FFT_LEN_100MHZ + ((gapNper + 10) * 2)) * 46));
+      }
+
+    }
+
+    /* GCD for Mix node network - According to 2.x spec - This part of FMR payload will be present ONLY
+    in MIX-MODE network and NC's moca version is 2.x and entry node's moca version is also 2.x.
+    1.x moca node's FMR paylaod will not have this part of payload data
+    */
+    console.log(" mocaNetVer = " + mocaNetVer + " ncMocaVer = " + ncMocaVer + " mocaNodeVer = " + mocaNodeVer)
+
+    if ((mocaNetVer < 0x20) && (ncMocaVer >= 0x20) && (mocaNodeVer >= 0x20))
+    {
+      gapGcd = ((fmrInfo[id][34] >> 24) & 0xff);
+      ofdmbGcd = ((fmrInfo[id][34] >> 8) & 0xffff);
+      rateGcd[numNode] = Math.floor((LDPC_LEN_50MHZ * ofdmbGcd) / ((FFT_LEN_50MHZ + (gapGcd * 2 + 10)) * 26));
+    }
+
+    numNode++;
+
+  }
+
+  updateTable();
+  buildTable();
+  document.getElementsByTagName("body")[0].style.cursor = "auto";
+}
+
+function formLoad(node_id)
+{
+
+  switch(progresCnt)
+  {
+    case 1:
+      init_proc();
+      document.netform.mocaPhyType[0].checked = true;
+      doFormGetJSON(document.localInfo, "phyRates.html",function(data, nu) {LocalInfo    = data.data; myNodeID = LocalInfo[0]; myNodeVersion = LocalInfo[0]; mocaNetVer = LocalInfo[11]; nodeBitMask = LocalInfo[12]; formLoad(0);}, function(data) {}, 0);
+      document.getElementsByTagName("body")[0].style.cursor = "wait";
+      progresCnt++;
+      break;
+
+  case 2:
+    if (node_id < MAX_NUM_NODES)
+    {
+      currNodeMask = 1 << node_id;
+
+      if(currNodeMask & nodeBitMask)
+      {
+        document.netInfo.data.value = node_id;
+        doFormGetJSON(document.netInfo,   "phyRates.html",function(data, nu) {netInfo[node_id] = data.data; formLoad(node_id + 1);}, function(data) {}, node_id);
+      }
+      else
+      {
+        formLoad(node_id + 1);
+      }
+    }
+    else
+    {
+      progresCnt++;
+      node_id = 0;
+      formLoad(node_id);
+    }
+    break;
+
+  case 3:
+    if (node_id < MAX_NUM_NODES)
+    {
+      currNodeMask = 1 << node_id;
+
+      if(currNodeMask & nodeBitMask)
+      {
+        /* NC's MOCA version -- LocalInfo[1] has NC nodeID */
+        ncMocaVer = netInfo[LocalInfo[1]&0xff][4] & 0xff;
+
+        /* Node's moca ver */
+        nodeMocaVer = netInfo[node_id][4] & 0xff;
+
+        var mocaVer = 0;
+        mocaVer = Math.min(ncMocaVer, nodeMocaVer)
+
+        var finalVer = 0;
+        if (mocaVer < 0x20)
+          finalVer = 1;
+        else
+          finalVer = 2;
+
+        console.log(" finalVer = " + finalVer);
+
+        /* Send MOCA shell command to the node */
+        document.fmrInfo.data.value = currNodeMask;
+        document.fmrInfo.data2.value = (finalVer);
+        doFormGetMultipleDataJSON(document.fmrInfo,   "phyRates.html",function(data, nu) {fmrInfo[node_id] = data.data; formLoad(node_id + 1);}, function(data) {}, node_id);
+      }
+      else
+      {
+        formLoad(node_id + 1);
+      }
+    }
+    else
+    {
+      progresCnt = 1;
+      node_id = 0;
+      refreshPage();
+    }
+    break;
+
+    default:
+      progresCnt = 1;
+      break;
+  }
+
+}
+
+function addFirstRow(numOfNodes)
+{
+
+  var cell = new Array(numOfNodes+1);
+  var cellElement = new Array(numOfNodes+1);
+  var table = document.getElementById('table_data');
+
+  var rowCount = table.rows.length;
+  var row = table.insertRow(rowCount);
+
+  for(idx = 0; idx <= numOfNodes; idx++)
+  {
+    cell[idx] = row.insertCell(idx);
+    cell[idx].align = "center";
+    cell[idx].width = 50;
+    cell[idx].height = 25;
+    if (idx == 0)
+    {
+      cell[idx].innerHTML = "From/To";
+      cell[idx].bgColor = "#C2DCCB";
+    }
+    else
+    {
+      if (((netInfo[nodeId[idx-1]][4]) & 0xff) == 0x25)
+      {
+        cell[idx].bgColor = "#1FE218";
+      }
+      else if (((netInfo[nodeId[idx-1]][4]) & 0xff) == 0x20)
+      {
+        cell[idx].bgColor = "#3F8F5A";
+      }
+      else
+      {
+        cell[idx].bgColor = "#96A59B";
+      }
+
+      cell[idx].innerHTML = nodeId[idx-1];
+
+    }
+  }
+}
+
+function doRow(index, numOfNodes)
+{
+
+  var cell = new Array(numOfNodes+1);
+  var table = document.getElementById('table_data');
+
+  var rowCount = table.rows.length;
+  var row = table.insertRow(rowCount);
+
+  //console.log(" Do ROW! : numOfNodes = ", numOfNodes);
+
+  for(idx = 0; idx <= numOfNodes; idx++)
+  {
+
+    cell[idx] = row.insertCell(idx);
+    cell[idx].width = 50;
+    cell[idx].height = 25;
+    cell[idx].align = "center";
+
+    if (idx == 0)
+    {
+      if (((netInfo[nodeId[index]][4]) & 0xff) == 0x25)
+      {
+        cell[idx].bgColor = "#1FE218";
+      }
+      else if (((netInfo[nodeId[index]][4]) & 0xff) == 0x20)
+      {
+        cell[idx].bgColor = "#3F8F5A";
+      }
+      else
+      {
+        cell[idx].bgColor = "#96A59B";
+      }
+      cell[idx].innerHTML = nodeId[index];
+    }
+    else
+    {
+      if (phy_rates[index][nodeId[idx-1]])
+      {
+        cell[idx].innerHTML = phy_rates[index][nodeId[idx-1]];
+      }
+      else
+      {
+        cell[idx].innerHTML = "NA";
+      }
+
+      if (idx-1 != index)
+      {
+        cell[idx].bgColor = "#FFFFFF";
+      }
+      else
+      {
+        cell[idx].bgColor = "#C2DCCB";
+      }
+    }
+  }
+}
+
+function showLegend()
+{
+
+  var cell = new Array(4);
+  var table = document.getElementById('legend_table');
+  table.setAttribute("border", "5");
+
+  var rowCount = table.rows.length;
+  var row = table.insertRow(rowCount);
+
+  cell[0] = row.insertCell(0);
+  cell[0].width = 50;
+  cell[0].height = 25;
+  cell[0].align = "center";
+  cell[0].bgColor = "#1FE218";
+  cell[0].innerHTML = "MoCA 2.5";
+  cell[0].frame = "void";
+
+  cell[1] = row.insertCell(1);
+  cell[1].width = 50;
+  cell[1].height = 25;
+  cell[1].align = "center";
+  cell[1].bgColor = "#3F8F5A";
+  cell[1].innerHTML = "MoCA 2.0";
+  cell[1].frame = "void";
+
+  cell[2] = row.insertCell(2);
+  cell[2].width = 50;
+  cell[2].height = 25;
+  cell[2].align = "center";
+  cell[2].bgColor = "#96A59B";
+  cell[2].innerHTML = "MoCA 1.x";
+  cell[2].frame = "void";
+
+  cell[3] = row.insertCell(3);
+  cell[3].width = 50;
+  cell[3].height = 25;
+  cell[3].align = "center";
+  cell[3].bgColor = "#C2DCCB";
+  cell[3].innerHTML = "N/A";
+  cell[3].border = "3";
+
+  var table = document.getElementById('legend_table').createCaption();
+  table.innerHTML = "<b>Legend</b>";
+
+}
+
+function refreshTable()
+{
+  updateTable();
+
+  var table = document.getElementById('table_data');
+
+  for(id = 0; id < numNode; id++)
+  {
+    for(jd = 0; jd < numNode; jd++)
+    {
+      if (phy_rates[id][nodeId[jd]])
+      {
+        table.rows[id+1].cells[jd+1].innerHTML = phy_rates[id][nodeId[jd]];
+      }
+      else
+      {
+        table.rows[id+1].cells[jd+1].innerHTML = "NA";
+      }
+    }
+  }
+}
+
+function buildTable()
+{
+
+  addFirstRow(numNode);
+  for(contIdx = 0; contIdx < numNode; contIdx++)
+  {
+    doRow(contIdx, numNode);
+  }
+
+  showLegend();
+
+}
+
+function updateTable()
+{
+  var tempNper = 0;
+  var tempVlper = 0;
+
+  for(id = 0; id < numNode; id++)
+  {
+    for(jd = 0; jd < MAX_NUM_NODES; jd++)
+    {
+      if(nodeId[id] == jd)
+      {
+        // If moca network is 1.x then there is no VLPER & GCD
+        if ((mocaNetVer < 0x20) && (document.netform.mocaPhyType[1].checked == true))
+          phy_rates[id][jd] = 0;
+        else
+          phy_rates[id][jd] = rateGcd[id];
+
+        continue;
+      }
+
+      switch(document.netform.mocaPhyType[1].checked)
+      {
+        case false: //Unicast NPER rate
+          phy_rates[id][jd] = rateNper[id][jd];
+          if (phy_rates[id][jd] >= 0)
+            tempNper += phy_rates[id][jd];
+          break;
+
+        case true:  //Unicast VLPER rate
+          phy_rates[id][jd] = rateVlper[id][jd];
+          if (phy_rates[id][jd] >= 0)
+            tempVlper += phy_rates[id][jd];
+          break;
+      }
+    }
+  }
+}
+
+
+</script>
+</head>
+
+
+<body onload="formLoad(0)" style="cursor: auto;">
+<div id="container">
+
+<script language="javascript">
+  createMenu();
+</script><div id="leftNav"><div id="logo"><table align="left"><tbody><tr><td><img alt="goCoax" src="PHY%20Rates-Dateien/logo.png" id="logoPic"></td></tr></tbody></table></div><ul id="menuList"><li>Status</li><ul id="subMenuStatus">    <li><a href="http://192.168.98.50/devStatus.html">Device Status</a></li>    <li><a href="http://192.168.98.50/phyRates.html">MoCA Link Rates</a></li></ul><li>Settings</li><ul id="subMenuSetup">    <li><a href="http://192.168.98.50/index.html">MoCA settings</a></li>    <li><a href="http://192.168.98.50/devSetup.html">Device settings</a></li>    <li><a href="http://192.168.98.50/security.html">Security settings</a></li></ul><li>Advanced</li><ul id="subMenuAdvanced">    <li><a href="http://192.168.98.50/upgrade.html">Upgrade</a></li>    <li><a href="http://192.168.98.50/restore.html">Restore</a></li>    <li><a href="http://192.168.98.50/reboot.html">Reboot</a></li></ul></ul></div>
+
+<div id="midMain">
+    <div id="pageTitle">
+        <table align="center">
+            <tbody><tr><td class="topTitle">PHY Rates</td></tr>
+        </tbody></table>
+    </div>
+
+    <div id="pageContent">
+    <table align="center" id="box_header">
+        <tbody><tr><td class="topheader">PHY Rates</td></tr>
+        <tr><td class="content">The following table shows the PHY rate in Megabits per second (Mbps) between coax bridges on the network. <br>
+        <font color="red"><b><u>NOTE:</u></b></font> Either NPER or VLPER will be displayed for MoCA 2.5 nodes based on value of boot config parameter "txpriorityper".</td>
+        </tr>
+
+        <form name="localInfo" method="post" action="/ms/0/0x15"></form>
+            <input type="hidden" name="data" value="" disabled="true">
+        
+
+        <form name="netInfo" method="post" action="/ms/0/0x16" value="0"></form>
+            <input type="hidden" name="data" value="1" disabled="true">
+        
+
+        <form name="fmrInfo" method="post" action="/ms/0/0x1D"></form>
+            <input type="hidden" name="data" value="2" disabled="true">
+            <input type="hidden" name="data2" value="2" disabled="true">
+        
+    </tbody></table>
+
+    <table id="body_header">
+        <tbody><tr><td class="topheader">PHY Rates</td></tr>
+    </tbody></table>
+
+    <form name="netform">
+
+    <table id="table_header" cellspacing="1" cellpadding="1" width="700" align="center" bgcolor="#ffffff" border="0" valign="middle">
+    <tbody><tr>
+        <td colspan="2">
+            <p><font size="1">&nbsp;</font></p>
+        </td>
+    </tr>
+
+    <tr>
+        <td class="form_label">Type:</td>
+        <td>
+            <input name="mocaPhyType" type="radio" value="1" onclick="refreshTable()" checked="checked">Unicast NPER &nbsp;
+            <input name="mocaPhyType" type="radio" value="0" onclick="refreshTable()">Unicast VLPER &nbsp;
+        </td>
+        <td></td>
+
+        <td colspan="2">
+            <p><font size="5">&nbsp;</font></p>
+        </td>
+    </tr>
+    </tbody></table>
+
+    <table id="table_data" border="2" cellspacing="2" cellpadding="2" width="numNode*20" align="center" bgcolor="#FFFFFF" valign="middle">
+    <tbody><tr><td align="center" width="50" height="25" bgcolor="#C2DCCB">From/To</td><td align="center" width="50" height="25" bgcolor="#1FE218">0</td><td align="center" width="50" height="25" bgcolor="#1FE218">1</td></tr><tr><td width="50" height="25" align="center" bgcolor="#1FE218">0</td><td width="50" height="25" align="center" bgcolor="#C2DCCB">455</td><td width="50" height="25" align="center" bgcolor="#FFFFFF">2983</td></tr><tr><td width="50" height="25" align="center" bgcolor="#1FE218">1</td><td width="50" height="25" align="center" bgcolor="#FFFFFF">3488</td><td width="50" height="25" align="center" bgcolor="#C2DCCB">701</td></tr></tbody></table>
+
+    
+        &nbsp;
+        &nbsp;
+        
+            <p><font size="3"> <align="center"> &nbsp;</align="center"></font></p>
+        
+        
+    
+
+    <table id="legend_table" style="font-size:18px;" border="5" cellspacing="2" cellpadding="2" width="numNode*20" align="center" bgcolor="#FFFFFF" valign="middle"><caption><b>Legend</b></caption>
+    <tbody><tr><td width="50" height="25" align="center" bgcolor="#1FE218">MoCA 2.5</td><td width="50" height="25" align="center" bgcolor="#3F8F5A">MoCA 2.0</td><td width="50" height="25" align="center" bgcolor="#96A59B">MoCA 1.x</td><td width="50" height="25" align="center" bgcolor="#C2DCCB">N/A</td></tr></tbody></table>
+
+    
+        &nbsp;
+        <p>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+        <input id="btnRefresh" type="button" value="Refresh" onclick="doRefresh()">
+        
+        </p>
+    
+    </form>
+    </div>
+</div>
+
+<script language="javascript">
+  showRight("phyRates");
+</script><div id="rightHelp"><div id="helpInfo"><table><tbody><tr><td>This
+ screen displays the current link status (PHY rate in Mbps) of each coax
+ bridge relative to other nodes on the coax network.This data rate is an
+ average of the Tx and Rx data rates between bridges.</td></tr></tbody></table></div></div>
+
+<div class="clear">
+</div>
+
+<script language="javascript">
+  showFooter();
+  setTimeout("enableRefresh(1)", 2000);
+</script><div id="footer"><table align="center">    <tbody><tr><td><a href="mailto:support@gocoax.com" target="_blank">Contact goCoax Customer Support</a></td></tr></tbody></table></div>
+
+</div>
+
+
+
+
+</body></html>
